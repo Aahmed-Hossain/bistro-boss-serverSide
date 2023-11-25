@@ -2,7 +2,9 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
-const stripe = require("stripe")('sk_test_51OGC6bLgdKhl0Qn1VTDVWazHBd3FObmpcdxeXac6U9KWZiDgswRyGhpU6onToj0lDjK6r7dX2NuNyTUPRn4uw4aw00q8x2pbWN');
+const stripe = require("stripe")(
+  "sk_test_51OGC6bLgdKhl0Qn1VTDVWazHBd3FObmpcdxeXac6U9KWZiDgswRyGhpU6onToj0lDjK6r7dX2NuNyTUPRn4uw4aw00q8x2pbWN"
+);
 const app = express();
 const port = process.env.PORT || 5000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -205,16 +207,18 @@ async function run() {
       const payment = req.body;
       const paymentResult = await paymentCollection.insertOne(payment);
       // console.log(payment);
-      const filter = { _id : {
-        $in: payment.cartIds.map(id=> new ObjectId(id))
-      }}
-      const deletedResult = await cartCollection.deleteMany(filter)
-      console.log('deleted result', deletedResult);
-      res.send({paymentResult, deletedResult});
+      const filter = {
+        _id: {
+          $in: payment.cartIds.map((id) => new ObjectId(id)),
+        },
+      };
+      const deletedResult = await cartCollection.deleteMany(filter);
+      console.log("deleted result", deletedResult);
+      res.send({ paymentResult, deletedResult });
     });
 
     app.get("/payments/:email", verifyToken, async (req, res) => {
-        const query = { email: req.params.email}
+      const query = { email: req.params.email };
       // const email = req.params.email;
       if (req.params.email !== req.decoded.email) {
         return res.status(403).send({ message: "Forbidden Acceess" });
@@ -223,6 +227,50 @@ async function run() {
       res.send(result);
     });
 
+    // analytics  or stats
+    app.get("/admin-stats", verifyToken, verifyAdmin, async (req, res) => {
+      const users = await userCollection.estimatedDocumentCount();
+      const totalItems = await menuCollection.estimatedDocumentCount();
+      const orders = await cartCollection.estimatedDocumentCount();
+      const result = await paymentCollection.aggregate([
+          { $group: { _id: null, totalRevenue: { $sum: "$price" } } },
+        ]).toArray();
+        //  at first ekta gruop korbo then oi group er ekta field k sum korbo. (ami group korbo _id diye. {_id : null = means sob golo ke group kora}  group kora hoile then $sum korbo price diye)
+      const revenue = result.length > 0 ? result[0].totalRevenue : 0;
+      res.send({ users, totalItems, orders, revenue });
+    });
+
+    // order stats
+    app.get('/order-stats', verifyToken,verifyAdmin, async(req, res)=> {
+      const result = await paymentCollection.aggregate([
+        {
+          $unwind: '$menuItemIds'
+        },
+        {
+          $lookup: { 
+            from: 'menu',
+            localField: 'menuItemIds',
+            foreignField: '_id',
+            as: 'menuItems'
+          }
+        },
+        {
+          $unwind: '$menuItems'
+        },
+        {
+          $group: {_id: '$menuItems.category', quantity: { $sum: 1}, revenue: {$sum: '$menuItems.price'}}
+        },
+        {
+          $project: {
+            _id: 0,
+            category: '$_id',
+            revenue: '$revenue',
+            quantity: '$quantity'
+          }
+        }
+      ]).toArray()
+      res.send(result)
+    })
 
     await client.db("admin").command({ ping: 1 });
     console.log(
