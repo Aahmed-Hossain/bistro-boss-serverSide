@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
+const stripe = require("stripe")('sk_test_51OGC6bLgdKhl0Qn1VTDVWazHBd3FObmpcdxeXac6U9KWZiDgswRyGhpU6onToj0lDjK6r7dX2NuNyTUPRn4uw4aw00q8x2pbWN');
 const app = express();
 const port = process.env.PORT || 5000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -27,6 +28,7 @@ async function run() {
     const menuCollection = client.db("bistroBossDB").collection("menu");
     const reviewsCollection = client.db("bistroBossDB").collection("reviews");
     const cartCollection = client.db("bistroBossDB").collection("carts");
+    const paymentCollection = client.db("bistroBossDB").collection("payments");
 
     // jwt token
     app.post("/jwt", async (req, res) => {
@@ -50,18 +52,18 @@ async function run() {
 
     // middle ware verify token
     const verifyToken = (req, res, next) => {
-      console.log(" token", req.headers.authorization);
+      // console.log(" token", req.headers.authorization);
       if (!req.headers.authorization) {
         return res.status(401).send({ message: "Not Authorized access" });
       }
       const token = req.headers.authorization.split(" ")[1];
-      console.log(token);
+      // console.log(token);
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
         if (err) {
           return res.status(401).send({ message: "UnAuthorized access" });
         }
         req.decoded = decoded;
-        console.log(decoded);
+        // console.log(decoded);
         next();
       });
     };
@@ -84,9 +86,10 @@ async function run() {
     });
 
     app.get("/users/admin/:email", verifyToken, async (req, res) => {
+      // must not use verifyAdmin
       const email = req.params.email;
       if (email !== req.decoded.email) {
-        console.log("admin ", req.decoded.email);
+        // console.log("admin ", req.decoded.email);
         return res.status(403).send({ message: "Unauthorized access" });
       }
       const query = { email: email };
@@ -104,7 +107,11 @@ async function run() {
       const result = await userCollection.deleteOne(filter);
       res.send(result);
     });
-    app.patch("/users/admin/:id",verifyToken,verifyAdmin,async (req, res) => {
+    app.patch(
+      "/users/admin/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
         const id = req.params.id;
         const filter = { _id: new ObjectId(id) };
         const updatedDoc = {
@@ -120,10 +127,51 @@ async function run() {
       const result = await menuCollection.find().toArray();
       res.send(result);
     });
+
+    app.get("/menu/:id", async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: id };
+      const result = await menuCollection.findOne(filter);
+      res.send(result);
+    });
+
+    app.patch("/menu/:id", async (req, res) => {
+      const item = req.body;
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          name: item.name,
+          price: item.price,
+          category: item.category,
+          recipe: item.recipe,
+          image: item.image,
+        },
+      };
+      const result = await menuCollection.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+
+    app.post("/menu", async (req, res) => {
+      const item = req.body;
+      const result = await menuCollection.insertOne(item);
+      res.send(result);
+    });
+
+    app.delete("/menu/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const result = await menuCollection.deleteOne(filter);
+      res.send(result);
+    });
+
+    // review related api's
     app.get("/reviews", async (req, res) => {
       const result = await reviewsCollection.find().toArray();
       res.send(result);
     });
+
+    // cart related api's
     app.post("/carts", async (req, res) => {
       const cartItem = req.body;
       const result = await cartCollection.insertOne(cartItem);
@@ -141,6 +189,40 @@ async function run() {
       const result = await cartCollection.deleteOne(filter);
       res.send(result);
     });
+    // payment intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+      res.send({ clientSecret: paymentIntent.client_secret });
+    });
+
+    app.post("/payments", async (req, res) => {
+      const payment = req.body;
+      const paymentResult = await paymentCollection.insertOne(payment);
+      // console.log(payment);
+      const filter = { _id : {
+        $in: payment.cartIds.map(id=> new ObjectId(id))
+      }}
+      const deletedResult = await cartCollection.deleteMany(filter)
+      console.log('deleted result', deletedResult);
+      res.send({paymentResult, deletedResult});
+    });
+
+    app.get("/payments/:email", verifyToken, async (req, res) => {
+        const query = { email: req.params.email}
+      // const email = req.params.email;
+      if (req.params.email !== req.decoded.email) {
+        return res.status(403).send({ message: "Forbidden Acceess" });
+      }
+      const result = await paymentCollection.find(query).toArray();
+      res.send(result);
+    });
+
 
     await client.db("admin").command({ ping: 1 });
     console.log(
